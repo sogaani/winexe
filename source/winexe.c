@@ -16,9 +16,12 @@
 #include <util/memory.h>
 #include <credentials.h>
 #include <util/time.h>
-#include <util/debug.h>
-#include <smb_cliraw.h>
-#include <smb_cli.h>
+#include "debug.h"
+#include "libcli/raw/libcliraw.h"
+#include "libcli/raw/smb.h"
+#include "libcli/smb2/smb2.h"
+#include "libcli/smb2/smb2_calls.h"
+#include "libcli/libcli.h"
 #include <dcerpc.h>
 #include <iconv.h>
 #include <errno.h>
@@ -154,6 +157,11 @@ static void parse_args(int argc, char *argv[], struct program_options *options)
 	if (opt_debuglevel)
 		lpcfg_set_cmdline(ldprm_ctx, "log level", opt_debuglevel);
 
+        lpcfg_set_cmdline(ldprm_ctx, "server max protocol", "SMB2");
+        lpcfg_set_cmdline(ldprm_ctx, "server min protocol", "SMB2");
+        lpcfg_set_cmdline(ldprm_ctx, "client min protocol", "SMB2");
+        lpcfg_set_cmdline(ldprm_ctx, "client max protocol", "SMB2");
+
 	cred = cli_credentials_init(talloc_autofree_context());
 
 	if (opt_user)
@@ -233,7 +241,7 @@ struct winexe_context {
 	iconv_t iconv_enc;
 	iconv_t iconv_dec;
 	struct program_options *args;
-	struct smbcli_tree *tree;
+	struct smb2_tree *tree;
 	struct async_context *ac_ctrl;
 	struct async_context *ac_in;
 	struct async_context *ac_out;
@@ -243,7 +251,7 @@ struct winexe_context {
 	int return_code;
 };
 
-static void on_in_pipe_open(struct winexe_context *c);
+static void on_in_pipe_create(struct winexe_context *c);
 static void on_in_pipe_write(struct winexe_context *c);
 
 static void on_out_pipe_read(struct winexe_context *c, const char *data, int len);
@@ -287,10 +295,9 @@ static void timer_handler(struct tevent_context *ev, struct tevent_timer *te, st
 	}
 }
 
-static void on_ctrl_pipe_open(struct winexe_context *c)
+static void on_ctrl_pipe_create(struct winexe_context *c)
 {
 	char *str = (c->args->flags & SVC_CONVERT) ? "get codepage\nget version\n" : "get version\n";
-
 	DEBUG(1, ("CTRL: Sending command: %s", str));
 	c->state = STATE_GETTING_VERSION;
 	async_write(c->ac_ctrl, str, strlen(str));
@@ -343,27 +350,27 @@ static void on_ctrl_pipe_read(struct winexe_context *c, const char *data, int le
 		c->ac_in = talloc_zero(c, struct async_context);
 		c->ac_in->tree = c->tree;
 		c->ac_in->cb_ctx = c;
-		c->ac_in->cb_open = (async_cb_open) on_in_pipe_open;
+		c->ac_in->cb_create = (async_cb_create) on_in_pipe_create;
 		c->ac_in->cb_write = (async_cb_write) on_in_pipe_write;
 		c->ac_in->cb_error = (async_cb_error) on_in_pipe_error;
-		fn = talloc_asprintf(c->ac_in, "\\" PIPE_NAME_IN, npipe);
-		async_open(c->ac_in, fn, OPENX_MODE_ACCESS_RDWR);
+		fn = talloc_asprintf(c->ac_in, PIPE_NAME_IN, npipe);
+		async_create(c->ac_in, fn, OPENX_MODE_ACCESS_RDWR);
 		/* Open out */
 		c->ac_out = talloc_zero(c, struct async_context);
 		c->ac_out->tree = c->tree;
 		c->ac_out->cb_ctx = c;
 		c->ac_out->cb_read = (async_cb_read) on_out_pipe_read;
 		c->ac_out->cb_error = (async_cb_error) on_out_pipe_error;
-		fn = talloc_asprintf(c->ac_out, "\\" PIPE_NAME_OUT, npipe);
-		async_open(c->ac_out, fn, OPENX_MODE_ACCESS_RDWR);
+		fn = talloc_asprintf(c->ac_out, PIPE_NAME_OUT, npipe);
+		async_create(c->ac_out, fn, OPENX_MODE_ACCESS_RDWR);
 		/* Open err */
 		c->ac_err = talloc_zero(c, struct async_context);
 		c->ac_err->tree = c->tree;
 		c->ac_err->cb_ctx = c;
 		c->ac_err->cb_read = (async_cb_read) on_err_pipe_read;
 		c->ac_err->cb_error = (async_cb_error) on_err_pipe_error;
-		fn = talloc_asprintf(c->ac_err, "\\" PIPE_NAME_ERR, npipe);
-		async_open(c->ac_err, fn, OPENX_MODE_ACCESS_RDWR);
+		fn = talloc_asprintf(c->ac_err, PIPE_NAME_ERR, npipe);
+		async_create(c->ac_err, fn, OPENX_MODE_ACCESS_RDWR); 
 	} else if ((p = cmd_check(data, CMD_RETURN_CODE, len))) {
 		c->return_code = strtoul(p, 0, 16);
 	} else if ((p = cmd_check(data, "version", len))) {
@@ -399,7 +406,7 @@ static void on_ctrl_pipe_read(struct winexe_context *c, const char *data, int le
 			c->state = STATE_CLOSING_FOR_REINSTALL;
 		}
 	} else {
-		DEBUG(0, ("CTRL: Unknown command: %.*s", len, data));
+		DEBUG(0, ("CTRL: Unknown command: %.*s\n", len, data));
 	}
 }
 
@@ -449,7 +456,7 @@ static bool is_fd_pollable(int fd)
 	return errno != EPERM;
 }
 
-static void on_in_pipe_open(struct winexe_context *c)
+static void on_in_pipe_create(struct winexe_context *c)
 {
 	if (is_fd_pollable(0))
 	    c->ev_stdin = tevent_add_fd(c->tree->session->transport->ev,
@@ -508,7 +515,6 @@ static void write_conv_buf(int fd, struct winexe_context *c, const char *data, i
 
 	}
 }
-
 static void on_out_pipe_read(struct winexe_context *c, const char *data, int len)
 {
 	write_conv_buf(1, c, data, len);
@@ -526,7 +532,7 @@ static void on_out_pipe_error(struct winexe_context *c, int func, NTSTATUS statu
 
 static void on_err_pipe_read(struct winexe_context *c, const char *data, int len)
 {
-	write_conv_buf(2, c, data, len);
+        write_conv_buf(2, c, data, len);
 }
 
 static void on_err_pipe_error(struct winexe_context *c, int func, NTSTATUS status)
@@ -549,15 +555,14 @@ static int exit_program(struct winexe_context *c)
 int main(int argc, char *argv[])
 {
 	NTSTATUS status;
-	struct smbcli_tree *cli_tree;
+	struct smb2_tree *smb2tree;
 	struct program_options options;
 
 	dcerpc_init();
-	ldprm_ctx = loadparm_init_global(false);
+	ldprm_ctx = loadparm_init_global(true);
 	parse_args(argc, argv, &options);
 	DEBUG(1, (version_message_fmt, VERSION_MAJOR, VERSION_MINOR));
 	ev_ctx = TEVENT_CONTEXT_INIT(talloc_autofree_context());
-
 	if (options.flags & SVC_FORCE_UPLOAD) {
 		svc_uninstall(ev_ctx, options.hostname,
 		              SERVICE_NAME, SERVICE_FILENAME,
@@ -574,19 +579,25 @@ int main(int argc, char *argv[])
 		if (!NT_STATUS_IS_OK(status))
 			return 1;
 	}
-
 	struct smbcli_options smb_options;
 	struct smbcli_session_options session_options;
 
 	lpcfg_smbcli_options(ldprm_ctx, &smb_options);
 	lpcfg_smbcli_session_options(ldprm_ctx, &session_options);
 
-	struct smbcli_state *cli_state;
-	status = smbcli_full_connection(NULL, &cli_state, options.hostname, lpcfg_smb_ports(ldprm_ctx),
-	                                "IPC$", NULL, lpcfg_socket_options(ldprm_ctx), options.credentials,
-	                                lpcfg_resolve_context(ldprm_ctx), ev_ctx,
-	                                &smb_options, &session_options,
-	                                lpcfg_gensec_settings(NULL, ldprm_ctx));
+        status = smb2_connect(NULL,
+                              options.hostname,
+                              lpcfg_smb_ports(ldprm_ctx),
+                              "IPC$",
+                              lpcfg_resolve_context(ldprm_ctx),
+                              options.credentials,
+                              &smb2tree,
+                              ev_ctx,
+                              &smb_options,
+                              lpcfg_socket_options(ldprm_ctx),
+                              lpcfg_gensec_settings(NULL, ldprm_ctx));
+
+
 	if (!NT_STATUS_IS_OK(status)) {
 		if (NT_STATUS_EQUAL(status, NT_STATUS_NO_MEMORY))
 			status = NT_STATUS_OBJECT_NAME_NOT_FOUND;
@@ -595,22 +606,19 @@ int main(int argc, char *argv[])
 			nt_errstr(status)));
 		return 1;
 	}
-
-	cli_tree = cli_state->tree;
-
 	struct winexe_context *c =
 		talloc_zero(NULL, struct winexe_context);
 	if (c == NULL) {
 		DEBUG(0, ("ERROR: Failed to allocate struct winexe_context\n"));
 		return 1;
 	}
+        c->tree = smb2tree;
 
-	c->tree = cli_tree;
 	c->ac_ctrl = talloc_zero(NULL, struct async_context);
-	c->ac_ctrl->tree = cli_tree;
+        c->ac_ctrl->tree = smb2tree;
 	c->ac_ctrl->cb_ctx = c;
-	c->ac_ctrl->cb_open = (async_cb_open) on_ctrl_pipe_open;
-	c->ac_ctrl->cb_close = (async_cb_open) on_ctrl_pipe_close;
+	c->ac_ctrl->cb_create = (async_cb_create) on_ctrl_pipe_create;
+	c->ac_ctrl->cb_close = (async_cb_create) on_ctrl_pipe_close;
 	c->ac_ctrl->cb_read = (async_cb_read) on_ctrl_pipe_read;
 	c->ac_ctrl->cb_error = (async_cb_error) on_ctrl_pipe_error;
 	c->args = &options;
@@ -619,9 +627,8 @@ int main(int argc, char *argv[])
 	c->iconv_enc = (iconv_t)-1;
 	c->state = STATE_OPENING;
 	do {
-		async_open(c->ac_ctrl, "\\" PIPE_NAME, OPENX_MODE_ACCESS_RDWR);
-
-		tevent_loop_wait(cli_tree->session->transport->ev);
+		async_create(c->ac_ctrl, PIPE_NAME, OPENX_MODE_ACCESS_RDWR);
+		tevent_loop_wait(smb2tree->session->transport->ev);
 
 		if (c->state == STATE_CLOSING_FOR_REINSTALL) {
 			DEBUG(1,("Uninstalling service\n"));
@@ -633,7 +640,9 @@ int main(int argc, char *argv[])
 		}
 
 		if (c->state != STATE_INSTALLING)
+                {
 			break;
+                }
 
 		DEBUG(1,("Installing service\n"));
 		status = svc_install(ev_ctx, c->args->hostname,
@@ -647,7 +656,6 @@ int main(int argc, char *argv[])
 			break;
 		}
 	} while (1);
-
 	return exit_program(c);
 }
 

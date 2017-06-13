@@ -11,10 +11,13 @@
 #include <credentials.h>
 #include <util/time.h>
 #include <gen_ndr/ndr_svcctl_c.h>
-#include <smb_cliraw.h>
-#include <smb_cli.h>
-#include <smb_composite.h>
-#include <util/debug.h>
+#include "libcli/raw/libcliraw.h"
+#include "libcli/libcli.h"
+#include "libcli/raw/smb.h"
+#include "libcli/smb_composite/smb_composite.h"
+#include "libcli/smb2/smb2.h"
+#include "libcli/smb2/smb2_calls.h"
+#include "debug.h"
 
 #include "winexesvc.h"
 #include "svcinstall.h"
@@ -202,6 +205,31 @@ static NTSTATUS svc_CloseServiceHandle(struct dcerpc_binding_handle *binding_han
 	return status;
 }
 
+/*
+  return a handle to the root of the share
+*/
+static NTSTATUS smb2_util_roothandle(struct smb2_tree *tree, struct smb2_handle *handle)
+{
+        struct smb2_create io;
+        NTSTATUS status;
+
+        ZERO_STRUCT(io);
+        io.in.oplock_level = 0;
+        io.in.desired_access = SEC_STD_SYNCHRONIZE | SEC_DIR_READ_ATTRIBUTE | SEC_DIR_LIST;
+        io.in.file_attributes   = 0;
+        io.in.create_disposition = NTCREATEX_DISP_OPEN;
+        io.in.share_access = NTCREATEX_SHARE_ACCESS_READ|NTCREATEX_SHARE_ACCESS_DELETE;
+        io.in.create_options = NTCREATEX_OPTIONS_ASYNC_ALERT;
+        io.in.fname = "";
+
+        status = smb2_create(tree, tree, &io);
+        NT_STATUS_NOT_OK_RETURN(status);
+
+        *handle = io.out.file.handle;
+
+        return NT_STATUS_OK;
+}
+
 static NTSTATUS svc_UploadService(struct tevent_context *ev_ctx, 
                                   const char *hostname,
                                   const char *service_filename,
@@ -211,49 +239,116 @@ static NTSTATUS svc_UploadService(struct tevent_context *ev_ctx,
                                   struct loadparm_context *ldprm_ctx,
                                   int flags)
 {
-	struct smb_composite_savefile *io;
-	struct smbcli_state *cli;
+        struct smb2_tree *smb2tree;
 	NTSTATUS status;
 	struct smbcli_options options;
 	struct smbcli_session_options session_options;
-
+        struct smb2_handle rootHandle;
 	lpcfg_smbcli_options(ldprm_ctx, &options);
 	lpcfg_smbcli_session_options(ldprm_ctx, &session_options);
 
-	status = smbcli_full_connection(NULL, &cli, hostname, lpcfg_smb_ports(ldprm_ctx),
-	                                "ADMIN$", NULL,
-	                                lpcfg_socket_options(ldprm_ctx), credentials,
-	                                lpcfg_resolve_context(ldprm_ctx), ev_ctx,
-	                                &options, &session_options,
-	                                lpcfg_gensec_settings(NULL, ldprm_ctx));
+
+
+        status = smb2_connect(NULL, hostname, lpcfg_smb_ports(ldprm_ctx), 
+                              "ADMIN$",  lpcfg_resolve_context(ldprm_ctx), credentials, 
+                              &smb2tree, ev_ctx, &options, lpcfg_socket_options(ldprm_ctx),
+                               lpcfg_gensec_settings(NULL, ldprm_ctx));
+
 	NT_ERR(status, 0, "Failed to open ADMIN$ share");
-	if (flags & SVC_FORCE_UPLOAD) {
-		smbcli_unlink(cli->tree, service_filename);
-	} else {
-		int fd = smbcli_open(cli->tree, service_filename, O_RDONLY, DENY_NONE);
-		if (fd >= 0) {
-			smbcli_close(cli->tree, fd);
-			return status;
-		}
+
+        status = smb2_util_roothandle(smb2tree, &rootHandle);
+	NT_ERR(status, 0, "Failed to open ADMIN$ share");
+
+	if (flags & SVC_FORCE_UPLOAD) 
+        {
+                smb2_util_unlink(smb2tree, service_filename);
+	} 
+        else 
+        {
+            struct smb2_create io;
+            ZERO_STRUCT(io);
+
+            io.in.desired_access = SEC_FLAG_MAXIMUM_ALLOWED;
+            io.in.file_attributes   = FILE_ATTRIBUTE_NORMAL;
+            io.in.create_disposition = NTCREATEX_DISP_OPEN;
+            io.in.share_access =
+                NTCREATEX_SHARE_ACCESS_DELETE|
+                NTCREATEX_SHARE_ACCESS_READ|
+                NTCREATEX_SHARE_ACCESS_WRITE;
+            io.in.create_options = 0;
+            io.in.fname = service_filename;
+
+            status = smb2_create(smb2tree, smb2tree, &io);
+            if (NT_STATUS_IS_OK(status))
+            { 
+                struct smb2_close c;
+                ZERO_STRUCT(c);
+
+                c.in.file.handle       = io.out.file.handle;
+                c.in.flags           = SMB2_CLOSE_FLAGS_FULL_INFORMATION;
+
+                status = smb2_close(smb2tree, &c);
+
+                return status;
+            } 
 	}
-	io = talloc_zero(cli->tree, struct smb_composite_savefile);
-	io->in.fname = service_filename;
 	if (flags & SVC_OSCHOOSE)
-		status = smbcli_chkpath(cli->tree, "SysWoW64");
+        {
+
+            struct smb2_find io;
+            ZERO_STRUCT(io);
+            TALLOC_CTX *tmp_ctx = talloc_new(smb2tree);
+
+            io.in.file.handle = rootHandle;
+            io.in.max_response_size  = 0x1000;
+            io.in.continue_flags = SMB2_CONTINUE_FLAG_SINGLE;
+            io.in.level = SMB2_FIND_DIRECTORY_INFO;
+            io.in.pattern = "SysWoW64";
+
+            status = smb2_find(smb2tree, tmp_ctx, &io);
+            talloc_free(tmp_ctx);
+        }
+        struct smb2_create cr;
+        ZERO_STRUCT(cr);
+
+        cr.in.desired_access = SEC_FLAG_MAXIMUM_ALLOWED;
+        cr.in.file_attributes   = FILE_ATTRIBUTE_NORMAL;
+        cr.in.create_disposition = NTCREATEX_DISP_OPEN_IF;
+        cr.in.share_access =
+            NTCREATEX_SHARE_ACCESS_DELETE|
+            NTCREATEX_SHARE_ACCESS_READ|
+            NTCREATEX_SHARE_ACCESS_WRITE;
+        cr.in.create_options = 0;
+        cr.in.fname = service_filename;
+        TALLOC_CTX *tmp_ctx = talloc_new(smb2tree);
+        status = smb2_create(smb2tree, tmp_ctx, &cr);
+	NT_ERR(status, 0, "Failed to create ADMIN$/%s", service_filename);
+        struct smb2_write w;
+        ZERO_STRUCT(w);
+        w.in.file.handle = cr.out.file.handle;
+        w.in.offset      = 0;
 
 	if (((flags & SVC_OSCHOOSE) && NT_STATUS_IS_OK(status)) || (flags & SVC_OS64BIT)) {
 		DEBUG(1, ("svc_UploadService: Installing 64bit %s\n", service_filename));
-		io->in.data = svc64_exe;
-		io->in.size = svc64_exe_len;
+                w.in.data = data_blob_const(svc64_exe,svc64_exe_len);
+
 	} else {
 		DEBUG(1, ("svc_UploadService: Installing 32bit %s\n", service_filename));
-		io->in.data = svc32_exe;
-		io->in.size = svc32_exe_len;
+                w.in.data = data_blob_const(svc32_exe,svc32_exe_len);
+
 	}
-	status = smb_composite_savefile(cli->tree, io);
-	NT_ERR(status, 0, "Failed to save ADMIN$/%s", io->in.fname);
-	talloc_free(io);
-	smbcli_tdis(cli);
+        status = smb2_write(smb2tree, &w);
+        if (NT_STATUS_IS_OK(status)) {
+        }
+	NT_ERR(status, 0, "Failed to save ADMIN$/%s", service_filename);
+        struct smb2_close c;
+        ZERO_STRUCT(c);
+
+        c.in.file.handle     =  cr.out.file.handle;
+        c.in.flags           = SMB2_CLOSE_FLAGS_FULL_INFORMATION;
+
+        status = smb2_close(smb2tree, &c);
+
 	return status;
 }
 
@@ -279,7 +374,6 @@ NTSTATUS svc_install(struct tevent_context *ev_ctx,
 	status = svc_pipe_connect(ev_ctx, &svc_pipe, hostname, credentials, ldprm_ctx);
 	NT_ERR(status, 0, "Cannot connect to svcctl pipe");
 	binding_handle = svc_pipe->binding_handle;
-
 	status = svc_OpenSCManager(binding_handle, hostname, &scm_handle);
 	NT_ERR(status, 0, "OpenSCManager failed");
 

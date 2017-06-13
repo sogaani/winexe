@@ -12,7 +12,7 @@
 
 #include "winexesvc.h"
 
-#if 0
+#if 1
 #define dbg(arg...) \
 ({\
 	FILE *f = fopen("C:\\" SERVICE_NAME ".log", "at");\

@@ -25,6 +25,9 @@ def distclean(ctx):
     import waflib.Scripting
     waflib.Scripting.distclean(ctx)
 
+def configure(conf):
+    conf.env.append_value('CXXFLAGS', '-O')
+
 def configure(ctx):
     ctx.load('compiler_c')
 
@@ -48,6 +51,7 @@ def configure(ctx):
             ctx.env.SAMBA_INCS = ctx.options.SAMBA_INCS
         else:
             ctx.env.SAMBA_INCS = '/usr/include/samba-4.0'
+            ctx.env.SAMBA_INCS = ctx.env.SAMBA_INCS+' ../smb4private/ ../'
         ctx.msg('SAMBA_INCS set to', ctx.env.SAMBA_INCS)
 
         if ctx.options.SAMBA_LIBS:
@@ -55,9 +59,9 @@ def configure(ctx):
         else:
             import subprocess
             for subdir in 'samba private'.split():
-                p = subprocess.Popen(['gcc', '-print-file-name=%s/libcli-ldap.so' % (subdir)], stdout=subprocess.PIPE).communicate()[0].rstrip()
+                p = subprocess.Popen(['gcc', '-print-file-name=%s/libcli-ldap-samba4.so' % (subdir)], stdout=subprocess.PIPE).communicate()[0].rstrip()
                 if not os.path.exists(p):
-                    p = subprocess.Popen(['gcc', '-print-file-name=%s/libcli-ldap.so.0' % (subdir)], stdout=subprocess.PIPE).communicate()[0].rstrip()
+                    p = subprocess.Popen(['gcc', '-print-file-name=%s/libcli-ldap-samba4.so.0' % (subdir)], stdout=subprocess.PIPE).communicate()[0].rstrip()
                 if not os.path.exists(p):
                     continue
                 ctx.env.SAMBA_LIBS = os.path.abspath(p + '/..')
@@ -65,20 +69,19 @@ def configure(ctx):
         ctx.msg('SAMBA_LIBS set to', ctx.env.SAMBA_LIBS)
 
         try:
-            for h in 'samba_util.h core/error.h credentials.h dcerpc.h gen_ndr/ndr_svcctl_c.h popt.h smb_cli.h smb_cliraw.h smb_composite.h tevent.h util/debug.h'.split():
+            for h in 'core/error.h credentials.h dcerpc.h gen_ndr/ndr_svcctl_c.h popt.h tevent.h util/debug.h'.split():
                 ctx.check(includes=ctx.env.SAMBA_INCS, msg='Checking for ' + h, fragment='''
                 #include <stdint.h>
                 #include <stdbool.h>
                 #if %d
-                #include <samba_util.h>
                 #include <core/error.h>
                 #endif
                 #include <%s>
                 int main() {return 0;}
-                ''' % (h in 'smb_cli.h smb_cliraw.h smb_composite.h util/debug.h'.split(), h))
+                ''' % (h in 'util/debug.h'.split(), h))
 
             libs = []
-            for l in 'cli-ldap dcerpc dcerpc-samba errors popt talloc ndr-standard samba-hostconfig samba-credentials smbclient-raw'.split():
+            for l in 'cli-ldap-samba4 dcerpc-samba4 dcerpc-samba-samba4 samba-errors popt talloc ndr-standard samba-hostconfig samba-credentials smbclient-raw-samba4 samba-debug-samba4'.split():
                 if ctx.check(lib=l, libpath=ctx.env.SAMBA_LIBS, mandatory=False):
                     libs.append(l)
                 else:
