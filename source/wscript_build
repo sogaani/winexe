@@ -2,21 +2,13 @@
 
 bld.install_files('${PREFIX}/share/man/man1', 'winexe.1')
 
-bld.program(target='winexesvc32.exe',
-    source='winexesvc_launch.c winexesvc_loop.c',
-    cflags="-Wall",
-    linkflags='-s',
-    lib='userenv',
-    env=bld.all_envs['win32'],
-    install_path=None)
+bld(rule='cp ${SRC} ${TGT}',
+    source=bld.path.make_node('winexesvc32.exe'),
+    target=bld.path.get_bld().make_node('winexesvc32.exe'))
 
-bld.program(target='winexesvc64.exe',
-    source='winexesvc_launch.c winexesvc_loop.c',
-    cflags="-Wall",
-    linkflags='-s',
-    lib='userenv',
-    env=bld.all_envs['win64'],
-    install_path=None)
+bld(rule='cp ${SRC} ${TGT}',
+    source=bld.path.make_node('winexesvc64.exe'),
+    target=bld.path.get_bld().make_node('winexesvc64.exe'))
 
 bld.program(target='bin2c',
     source='bin2c.c',
@@ -51,5 +43,5 @@ if bld.env.SAMBA_DIR:
         linkflags='-pthread',
         stlibpath=bld.srcnode.abspath() + '/smb_static/build',
         stlib='smb_static bsd z resolv rt',
-        lib='dl'
+        lib='dl gnutls'
         )

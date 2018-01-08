@@ -7,16 +7,17 @@
 #include <core/ntstatus.h>
 #include <fcntl.h>
 
+#include <sys/types.h>
 #include <tevent.h>
 #include <credentials.h>
 #include <util/time.h>
 #include <gen_ndr/ndr_svcctl_c.h>
-#include "libcli/raw/libcliraw.h"
-#include "libcli/libcli.h"
-#include "libcli/raw/smb.h"
-#include "libcli/smb_composite/smb_composite.h"
-#include "libcli/smb2/smb2.h"
-#include "libcli/smb2/smb2_calls.h"
+#include <libcli/raw/libcliraw.h>
+#include <libcli/libcli.h>
+#include <libcli/raw/smb.h>
+#include <libcli/smb_composite/smb_composite.h>
+#include <libcli/smb2/smb2.h>
+#include <libcli/smb2/smb2_calls.h>
 #include "debug.h"
 
 #include "winexesvc.h"

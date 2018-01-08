@@ -36,7 +36,7 @@ def configure(ctx):
         waf = ctx.env.SAMBA_DIR + '/buildtools/bin/waf'
         ctx.find_program(waf)
         if not os.path.exists('smb_static/build/libsmb_static.a'):
-            os.system('cd smb_static && %s configure --bundled-libraries=ALL && %s --targets=smb_static' % (waf, waf))
+            os.system('cd smb_static && %s configure --bundled-libraries=ALL --without-gettext && %s --without-gettext && %s install' % (waf, waf, waf))
         if ctx.options.ENABLE_SHARED:
             ctx.env.ENABLE_SHARED = True
         else:
@@ -45,8 +45,8 @@ def configure(ctx):
         ctx.env.ENABLE_SHARED = True
 
     if ctx.env.ENABLE_SHARED:
-        ctx.check_cfg(package='dcerpc', uselib_store='DCERPC', args=['--cflags', '--libs'])
-        ctx.check_cfg(package='talloc', uselib_store='TALLOC', args=['--cflags', '--libs'])
+       # ctx.check_cfg(package='dcerpc', uselib_store='DCERPC', args=['--cflags', '--libs'])
+       # ctx.check_cfg(package='talloc', uselib_store='TALLOC', args=['--cflags', '--libs'])
         if ctx.options.SAMBA_INCS:
             ctx.env.SAMBA_INCS = ctx.options.SAMBA_INCS
         else:
@@ -73,6 +73,8 @@ def configure(ctx):
                 ctx.check(includes=ctx.env.SAMBA_INCS, msg='Checking for ' + h, fragment='''
                 #include <stdint.h>
                 #include <stdbool.h>
+		#include <time.h>
+		#include <sys/types.h>
                 #if %d
                 #include <core/error.h>
                 #endif
@@ -81,7 +83,7 @@ def configure(ctx):
                 ''' % (h in 'util/debug.h'.split(), h))
 
             libs = []
-            for l in 'cli-ldap-samba4 dcerpc-samba4 dcerpc-samba-samba4 samba-errors popt talloc ndr-standard samba-hostconfig samba-credentials smbclient-raw-samba4 samba-debug-samba4'.split():
+            for l in 'dcerpc talloc tevent samba-util cli-ldap-samba4 dcerpc-samba4 dcerpc-samba-samba4 samba-errors popt talloc ndr-standard samba-hostconfig samba-credentials smbclient-raw-samba4 samba-debug-samba4'.split():
                 if ctx.check(lib=l, libpath=ctx.env.SAMBA_LIBS, mandatory=False):
                     libs.append(l)
                 else:
@@ -103,11 +105,11 @@ def configure(ctx):
     if not ctx.env.ENABLE_SHARED and not ctx.env.SAMBA_DIR:
         ctx.fatal('Cannot continue! Please either install Samba shared libraries and re-run waf, or download the Samba source code and re-run waf with the "--samba-dir" option.')
 
-    ctx.setenv('win32', ctx.env)
-    ctx.find_program([ a + '-' + t + '-gcc' for a in AR32 for t in TC], var='CC_WIN32')
-    ctx.env.update({"CC": ctx.env.CC_WIN32, "LINK_CC": ctx.env.CC_WIN32})
+    #ctx.setenv('win32', ctx.env)
+    #ctx.find_program([ a + '-' + t + '-gcc' for a in AR32 for t in TC], var='CC_WIN32')
+    #ctx.env.update({"CC": ctx.env.CC_WIN32, "LINK_CC": ctx.env.CC_WIN32})
 
-    ctx.setenv('win64', ctx.env)
-    ctx.find_program([ a + '-' + t + '-gcc' for a in AR64 for t in TC], var='CC_WIN64')
-    ctx.env.update({"CC": ctx.env.CC_WIN64, "LINK_CC": ctx.env.CC_WIN64})
+    #ctx.setenv('win64', ctx.env)
+    #ctx.find_program([ a + '-' + t + '-gcc' for a in AR64 for t in TC], var='CC_WIN64')
+    #ctx.env.update({"CC": ctx.env.CC_WIN64, "LINK_CC": ctx.env.CC_WIN64})
 

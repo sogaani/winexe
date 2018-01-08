@@ -4,6 +4,7 @@
   License: GNU General Public License version 3
 */
 
+#include <sys/types.h>
 #include <talloc.h>
 #include <string.h>
 #include <stdint.h>

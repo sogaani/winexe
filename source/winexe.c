@@ -4,9 +4,10 @@
   License: GNU General Public License version 3
 */
 
+#include <sys/types.h>
 #include <sys/epoll.h>
 #include <sys/fcntl.h>
-#include <sys/unistd.h>
+#include <unistd.h>
 #include <sys/termios.h>
 #include <signal.h>
 #include <string.h>
@@ -17,11 +18,12 @@
 #include <credentials.h>
 #include <util/time.h>
 #include "debug.h"
-#include "libcli/raw/libcliraw.h"
-#include "libcli/raw/smb.h"
-#include "libcli/smb2/smb2.h"
-#include "libcli/smb2/smb2_calls.h"
-#include "libcli/libcli.h"
+#include "param.h"
+#include <libcli/raw/libcliraw.h>
+#include <libcli/raw/smb.h>
+#include <libcli/smb2/smb2.h>
+#include <libcli/smb2/smb2_calls.h>
+#include <libcli/libcli.h>
 #include <dcerpc.h>
 #include <iconv.h>
 #include <errno.h>
