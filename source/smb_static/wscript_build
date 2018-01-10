@@ -35,6 +35,7 @@ bld.SAMBA_SUBSYSTEM(
     source         = source,
     deps           = deps,
     group          = 'main',
+    winexe         = True,
     )
 
 bld.SET_BUILD_GROUP('final')

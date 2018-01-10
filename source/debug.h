@@ -27,9 +27,9 @@ extern int lcl_debug_level;
 #define DEBUG( level, body ) \
  (void)( ((level) <= MAX_DEBUG_LEVEL) && \
  unlikely(lcl_debug_level >= (level))           \
-  && (dbgtext body) )
+  && (winexe_dbgtext body) )
 
 #define DEBUGLVL( level ) \
   ( CHECK_DEBUGLVL(level) )
 
-int dbgtext( const char *, ... );
+int winexe_dbgtext( const char *, ... );

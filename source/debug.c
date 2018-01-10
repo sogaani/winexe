@@ -3,7 +3,7 @@
 
 int lcl_debug_level = 0;
 
-int dbgtext(const char *format, ...) 
+int winexe_dbgtext(const char *format, ...) 
 {
 	va_list args;
 	va_start(args,format);

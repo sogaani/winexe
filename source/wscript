@@ -31,12 +31,15 @@ def configure(conf):
 def configure(ctx):
     ctx.load('compiler_c')
 
+    if ctx.options.SAMBA_INCS:
+        ctx.env.SAMBA_INCS = ctx.options.SAMBA_INCS
+
     if ctx.options.SAMBA_DIR:
         ctx.env.SAMBA_DIR = os.path.abspath(ctx.options.SAMBA_DIR)
         waf = ctx.env.SAMBA_DIR + '/buildtools/bin/waf'
         ctx.find_program(waf)
         if not os.path.exists('smb_static/build/libsmb_static.a'):
-            os.system('cd smb_static && %s configure --bundled-libraries=ALL --without-gettext && %s --without-gettext && %s install' % (waf, waf, waf))
+            os.system('cd smb_static && %s configure -v --bundled-libraries=ALL --without-gettext && %s -v --without-gettext --targets=smb_static' % (waf, waf))
         if ctx.options.ENABLE_SHARED:
             ctx.env.ENABLE_SHARED = True
         else:
